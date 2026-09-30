@@ -1,1 +1,1 @@
-# rai-polybo
+# PolyBO: Structure-Aware Machine Learning for Materials Discovery
