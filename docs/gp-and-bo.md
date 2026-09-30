@@ -47,7 +47,27 @@ The kernel must produce a positive semi-definite matrix $K_{ij} = k(x_i, x_j)$ f
 
 ### The posterior predictive
 
-With noisy observations $y = f(X) + \varepsilon$, the observed vector has covariance $K + \sigma_n^2 I$. Applying the conditioning rule with a zero prior mean gives the posterior at a test point $x_*$:
+Let $\mathbf{f} = f(X)$ be the function values at the training inputs and $f_* = f(x_*)$ the value at a test input. The quantity we want is the posterior predictive. Bayes' rule gives the posterior over $\mathbf{f}$, and averaging the prior conditional over that posterior gives the prediction:
+
+$$
+p(\mathbf{f} \mid \mathbf{y}) = \frac{p(\mathbf{y} \mid \mathbf{f})\, p(\mathbf{f})}{p(\mathbf{y})},
+\qquad
+p(f_* \mid \mathbf{y}) = \int p(f_* \mid \mathbf{f})\, p(\mathbf{f} \mid \mathbf{y})\, d\mathbf{f}
+$$
+
+Every density here is Gaussian:
+
+- the prior $p(\mathbf{f}) = \mathcal{N}(\mathbf{0}, K)$;
+- the likelihood $p(\mathbf{y} \mid \mathbf{f}) = \mathcal{N}(\mathbf{f}, \sigma_n^2 I)$;
+- the prior conditional $p(f_* \mid \mathbf{f})$, which comes from the conditioning rule above.
+
+So the integral can be done in closed form. There is also a shortcut that skips it. Since $\mathbf{y} = \mathbf{f} + \boldsymbol{\varepsilon}$ with independent Gaussian noise, $\mathbf{y}$ and $f_*$ are themselves jointly Gaussian:
+
+$$
+\begin{bmatrix} \mathbf{y} \\ f_* \end{bmatrix} \sim \mathcal{N}\left( \mathbf{0}, \begin{bmatrix} K + \sigma_n^2 I & \mathbf{k}_* \\ \mathbf{k}_*^\top & k(x_*, x_*) \end{bmatrix} \right)
+$$
+
+The noise adds $\sigma_n^2 I$ to the covariance of the observed block only. Because it is independent of $f$, it does not change any cross-covariance. Applying the conditioning rule to this joint, with a zero prior mean, gives the posterior at a test point $x_*$:
 
 $$
 \mu_n(x_*) = \mathbf{k}_*^\top (K + \sigma_n^2 I)^{-1} \mathbf{y},
@@ -63,7 +83,23 @@ In practice nobody inverts $K$. You compute a Cholesky factorization $LL^\top = 
 
 ### Learning hyperparameters from the marginal likelihood
 
-The kernel has hyperparameters $\theta$, such as lengthscales, an output scale and the noise variance. The standard way to set them is type-II maximum likelihood: maximize the probability of the observed data with $f$ integrated out. For a GP this integral is closed-form:
+The kernel has hyperparameters $\theta$, such as lengthscales, an output scale and the noise variance. The standard way to set them is type-II maximum likelihood: maximize the probability of the observed data with $f$ integrated out. This quantity is the marginal likelihood, also called the evidence. It is the denominator $p(\mathbf{y})$ of Bayes' rule above, now written with its dependence on $\theta$ made explicit:
+
+$$
+p(\mathbf{y} \mid X, \theta) = \int p(\mathbf{y} \mid \mathbf{f})\, p(\mathbf{f} \mid X, \theta)\, d\mathbf{f}
+= \int \mathcal{N}(\mathbf{y} \mid \mathbf{f}, \sigma_n^2 I)\; \mathcal{N}(\mathbf{f} \mid \mathbf{0}, K_\theta)\, d\mathbf{f}
+$$
+
+Read it as follows: draw functions from the prior with hyperparameters $\theta$, add noise, and measure how much probability lands on the data we actually saw. We never commit to one $f$. Every $f$ the prior allows is weighted by its prior probability.
+
+For a GP this integral is closed-form. The integral is the density of $\mathbf{y} = \mathbf{f} + \boldsymbol{\varepsilon}$, where $\mathbf{f} \sim \mathcal{N}(\mathbf{0}, K_\theta)$ and $\boldsymbol{\varepsilon} \sim \mathcal{N}(\mathbf{0}, \sigma_n^2 I)$ are independent. A sum of independent Gaussians is Gaussian, with the means and the covariances added, so
+
+$$
+p(\mathbf{y} \mid X, \theta) = \mathcal{N}(\mathbf{y} \mid \mathbf{0}, K_y),
+\qquad K_y = K_\theta + \sigma_n^2 I
+$$
+
+Its logarithm is the log-density of a multivariate normal:
 
 $$
 \log p(\mathbf{y} \mid X, \theta) =
@@ -75,7 +111,15 @@ $$
 
 The first term rewards fitting the data. The second term penalizes flexible models: a short lengthscale spreads prior mass over many wiggly functions, which inflates the determinant. The balance between them is an automatic Occam's razor, and it is the main reason GPs rarely overfit badly despite being nonparametric.
 
-The gradient is also closed-form, which makes L-BFGS the usual optimizer:
+The gradient is also closed-form. Differentiating the two $\theta$-dependent terms needs two matrix identities:
+
+$$
+\frac{\partial K_y^{-1}}{\partial \theta_j} = -K_y^{-1} \frac{\partial K_y}{\partial \theta_j} K_y^{-1},
+\qquad
+\frac{\partial \log |K_y|}{\partial \theta_j} = \operatorname{tr}\left( K_y^{-1} \frac{\partial K_y}{\partial \theta_j} \right)
+$$
+
+Applying them and writing $\mathbf{y}^\top A \mathbf{y} = \operatorname{tr}(A\, \mathbf{y}\mathbf{y}^\top)$ gives the gradient. That makes L-BFGS, a quasi-Newton method that builds a curvature estimate from recent gradients, the usual optimizer:
 
 $$
 \frac{\partial}{\partial \theta_j} \log p(\mathbf{y} \mid X, \theta)
@@ -87,9 +131,65 @@ The marginal likelihood is non-convex in $\theta$ and often multimodal. A common
 
 ### The weight-space view
 
-There is a second, equally useful way to see a GP. Take a linear model $f(x) = \phi(x)^\top w$ over some features $\phi$, with a Gaussian prior $w \sim \mathcal{N}(0, \Sigma_p)$. Then $f$ is a GP with kernel $k(x, x') = \phi(x)^\top \Sigma_p \phi(x')$.
+There is a second, equally useful way to see a GP. Take a linear model $f(x) = \phi(x)^\top w$ over some features $\phi$, with a Gaussian prior $w \sim \mathcal{N}(0, \Sigma_p)$. Every draw of $w$ gives one function, so a prior on weights is a prior on functions. Because $f(x)$ is a linear combination of Gaussian weights, its values at any finite set of inputs are jointly Gaussian, so $f$ is a GP. Its kernel follows directly from the covariance of the weights:
 
-The kernel trick runs this backwards. A kernel like the squared exponential corresponds to infinitely many features, so a GP is Bayesian linear regression in a feature space you never have to construct. [Neal (1996)](https://doi.org/10.1007/978-1-4612-0745-0) showed that a one-hidden-layer Bayesian neural network converges to a GP as its width goes to infinity. [Lee et al. (2018)](https://arxiv.org/abs/1711.00165) extended this to deep networks (the NNGP). The weight-space view also underlies the random-feature approximations in the scaling section.
+$$
+k(x, x') = \mathrm{Cov}\big(f(x), f(x')\big) = \sum_{i,j} \phi_i(x)\, \mathrm{Cov}(w_i, w_j)\, \phi_j(x') = \phi(x)^\top \Sigma_p \phi(x')
+$$
+
+For example, features $\phi(x) = [1, x, x^2]$ with $w \sim \mathcal{N}(0, I)$ give random parabolas, and their kernel is $k(x, x') = 1 + x x' + x^2 x'^2$.
+
+#### The kernel trick
+
+The **kernel trick** runs this construction backwards. If an algorithm touches its features only through dot products $\phi(x)^\top \phi(x')$, you can replace every dot product with a function $k(x, x')$ that returns the same number. You then never have to build the features.
+
+Here is a small example. Take 2D inputs and quadratic features $\phi(x) = [x_1^2,\ \sqrt{2}\, x_1 x_2,\ x_2^2]$. For $x = (1, 2)$ and $z = (3, 1)$:
+
+$$
+\phi(x)^\top \phi(z) = [1,\ 2\sqrt{2},\ 4] \cdot [9,\ 3\sqrt{2},\ 1] = 9 + 12 + 4 = 25,
+\qquad
+(x^\top z)^2 = (3 + 2)^2 = 25
+$$
+
+The identity $\phi(x)^\top \phi(z) = (x^\top z)^2$ holds for every $x$ and $z$. So $k(x, z) = (x^\top z)^2$ computes the dot product of the quadratic features using only the original two coordinates. In this tiny case the saving is negligible, but it grows quickly:
+
+| Setting | Number of features | Cost of $k$ |
+| --- | --- | --- |
+| $d = 2$, degree 2 | 3 | one length-2 dot product |
+| $d = 100$, degree 5 | about 92 million | one length-100 dot product, then a 5th power |
+| Squared exponential | infinite | one $\exp$ |
+
+The squared exponential's features can be written out explicitly. In 1D with $\ell = 1$, factor the kernel and Taylor-expand $e^{xz}$:
+
+$$
+k(x, z) = e^{-(x - z)^2/2} = e^{-x^2/2}\, e^{-z^2/2}\, e^{xz}
+= \sum_{n=0}^{\infty} \underbrace{\Big(e^{-x^2/2} \tfrac{x^n}{\sqrt{n!}}\Big)}_{\phi_n(x)} \underbrace{\Big(e^{-z^2/2} \tfrac{z^n}{\sqrt{n!}}\Big)}_{\phi_n(z)}
+$$
+
+So the SE kernel is a dot product over polynomial features of every degree, and their weights shrink like $1/\sqrt{n!}$. High-degree terms contribute little, which is why SE samples are so smooth. An equivalent picture uses Gaussian bumps $e^{-(x - c)^2/\ell^2}$ centered at every location $c$, each with an independent random weight. Integrating over $c$ gives the SE kernel with lengthscale $\ell$.
+
+The trick applies to GPs because, once the Bayesian linear regression posterior is worked out, the features appear only in pairs $\phi(x_i)^\top \phi(x_j)$. Every formula can therefore be written with kernel evaluations alone:
+
+$$
+\mu_n(x_*) = \mathbf{k}_*^\top (K + \sigma_n^2 I)^{-1} \mathbf{y},
+\qquad
+\sigma_n^2(x_*) = k(x_*, x_*) - \mathbf{k}_*^\top (K + \sigma_n^2 I)^{-1} \mathbf{k}_*
+$$
+
+These are exactly the posterior formulas from before. $K_{ij} = k(x_i, x_j)$, $[\mathbf{k}_*]_i = k(x_i, x_*)$ and $k(x_*, x_*)$ are all kernel values, and $\phi$ appears nowhere. A GP is Bayesian linear regression in a feature space you never have to construct. The function-space view starts from $k$ and leaves the features implicit, the weight-space view starts from $\phi$, and the kernel trick is the bridge between them.
+
+This gives a useful way to read any kernel: choosing a kernel means choosing the building blocks $f$ is made of.
+
+- A polynomial kernel gives polynomial features and polynomial functions.
+- The SE kernel gives all polynomial degrees, weighted toward low ones, and very smooth functions.
+- A periodic kernel gives sines and cosines, and repeating functions.
+- A sum of kernels concatenates the two feature sets, for example a linear trend plus smooth wiggles.
+
+#### Why the weight-space view matters
+
+The two views give identical predictions at different costs. Function space works with an $n \times n$ matrix and costs $O(n^3)$. Weight space works with a $D \times D$ matrix for $D$ features and costs $O(nD^2 + D^3)$. Approximating a kernel with a few hundred random features makes weight space much cheaper for large $n$. It also yields an explicit function that can be sampled once and optimized. This is the idea behind the random-feature approximations and pathwise sampling in the scaling section.
+
+The view also connects GPs to neural networks. A one-hidden-layer network $f(x) = \sum_i w_i\, \sigma(a_i^\top x + b_i)$ is a linear model over random features $\sigma(a_i^\top x + b_i)$. [Neal (1996)](https://doi.org/10.1007/978-1-4612-0745-0) showed that with random parameters it converges to a GP as the width goes to infinity, by the central limit theorem. [Lee et al. (2018)](https://arxiv.org/abs/1711.00165) extended this to deep networks (the NNGP).
 
 For the full treatment, Chapters 2 and 5 of [Rasmussen & Williams (2006)](http://gaussianprocess.org/gpml/) remain the reference. For intuition first, the interactive [Distill article on GPs](https://distill.pub/2019/visual-exploration-gaussian-processes/) is excellent.
 
